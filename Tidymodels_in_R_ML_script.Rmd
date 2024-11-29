@@ -1,0 +1,602 @@
+---
+title: "machine learning models"
+output: html_document
+---
+
+# Getting set up and overview of the project
+
+In this task, you will import the required packages and data for this project. You may need to install these packages if not installed. You can use the `install.packages()` function.
+
+```{r message = F, warning = F}
+## Import required packages
+library(tidyverse)
+library(tidymodels)
+library(themis)
+library(table1)
+library(ggpubr)
+library(broom)
+library(ggfortify)
+library(GGally)
+library(PerformanceAnalytics)
+library(car)
+library(caret)
+library(skimr)
+library(discrim)
+library(glmnet)
+library(kknn)
+library(naivebayes)
+library(kernlab)
+library(xgboost)
+library(gridExtra)
+
+## Load the data set
+readmit_df <- read.csv("readmission_data.csv")
+
+## Check the dimension of the data set
+dim(readmit_df)
+
+## Check the column names for the data set
+names(readmit_df)
+
+```
+
+# creating summary statistics using R functions.
+```{r}
+## Get a broad overview of the data
+skim(readmit_df)
+
+## Quick data pre-processing - 
+readmit_df_pp <- readmit_df %>% 
+  mutate(readmit_num = case_when(
+          readmitted == "No" ~ 0,
+          readmitted == "Yes" ~ 1)) %>% 
+  ## Relocate the readmitted variable to the last column
+  relocate(readmitted, .after = readmit_num) %>%
+  ## Convert variable data types
+  mutate_at(vars(!c(readmit_num, hospital_stay,
+                    patient_visits, num_medications, num_diagnosis)), as.after)
+
+## Check the internal structure of the data frame
+glimpse(readmit_df_pp)
+
+## Create the summary table
+table::table1(~.| readmitted, data = readmit_df_pp)
+```
+
+# Exploring the categorical data using visualizations
+
+
+```{r}
+## Create the plot for readmission status.
+ggplot(readmit_df_pp, aes(x = "", y = readmitted, fill = readmitted))+
+  geom_bar(stat = "identify", width = 1)+
+  coord_polar("y", start = 0)
+
+## Create plots for race, sex, age, and HbA1c.
+p1 <- ggplot(readmit_df_pp, aes(x = "", y = race, fill = race))+
+  geom_bar(stat = "identify", width = 1)+
+  coord_polar("y", start = 0)
+
+p2 <- ggplot(readmit_df_pp, aes(x = "", y = sex, fill = sex))+
+  geom_bar(stat = "identify", width = 1)+
+  coord_polar("y", start = 0)
+
+p3 <- ggplot(readmit_df_pp, aes(x = "", y = age, fill = age))+
+  geom_bar(stat = "identify", width = 1)+
+  coord_polar("y", start = 0)
+
+p4 <- ggplot(readmit_df_pp, aes(x = "", y = HbA1c, fill = HbA1c))+
+  geom_bar(stat = "identify", width = 1)+
+  coord_polar("y", start = 0)
+## Arrange the graphs
+grid.arrange(p1, p2, p3, p4, ncol = 2)
+
+## Create a bar graph of HbA1c levels
+ggplot(data = readmit_df_pp)+
+  geom_bar(mapping = aes(x = HbA1c))
+
+readmit_df_pp %>%
+ggplot()+
+    geom_bar(mapping = aes(x = HbA1c))
+  
+## Create a bar graph of HbA1c by readmission status
+ggplot(data = readmit_df_pp)+
+    geom_bar(mapping = aes(x = HbA1c, fill = readmitted))
+
+
+```
+
+# Exploring the numeric data using visualizations
+
+
+```{r}
+## Create a boxplot for number of medications
+ggplot(readmit_df_pp, aes(y = num_medications))+
+  stat_boxplot(geom = "errorbar", width = 0.3)+
+  geom_boxplot() + 
+  coord_flip()+
+  labs(x = "Number of medications", title = "boxplot of number of medications")
+  
+## Create a boxplot for number of medications by readmission status
+ggplot(readmit_df_pp, aes(x = readmitted, y = num_medications))+
+  stat_boxplot(geom = "errorbar", width = 0.3)+
+  geom_boxplot() + 
+  coord_flip()+
+  labs(x = "comparing the number of medications across readmisson status")
+  
+
+## Create a histogram for number of medications
+ggplot(readmit_df_pp, aes(x = num_medications))+
+  geom_histogram(colour = "black", fill = "white")+
+  labs(x = "Number of medications", title = "Histogram of number of medications")
+
+## Create a bar graph of diabetic medication change
+ggplot(data = readmit_df_pp)+
+  geom_bar(mapping = aes(x = diabetesMed))
+
+## Create a bar graph of diabetic medication change by readmission status
+ggplot(data = readmit_df_pp)+
+  geom_bar(mapping = aes(x = diabetesMed, fill = readmitted))
+
+## Create a boxplot for number of diagnosis by readmission status
+ggplot(readmit_df_pp, aes(x = readmitted, y = num_diagnosis)) +
+  stat_boxplot(geom = "errorbar", width = 0.3) +
+  geom_boxplot()+
+  ggtitle("Comparing the number of diagnosis to readmisson status")
+```
+
+# Checking for data issues
+
+
+```{r, warning=FALSE}
+## Create a correlation matrix of the numeric variables
+readmit_df_pp %>% 
+  dplyr::select(num_medications, num_diagnosis, patient_visits) %>% 
+  cor()
+
+## Create a correlation matrix of the numeric variables
+readmit_df_pp %>% 
+  dplyr::select_if(is.numeric) %>% 
+  chart.Correlation()
+## Create a correlation chart of the numeric variables
+car::vif(lm(readmit_num ~ num_medications + hospital_stay+
+              num_diagnosis + patient_visits, data = readmit_df_pp)) %>% 
+  broom::tidy()
+
+
+#Create data splits for modeling
+
+## Set the seed
+set.seed(2024)
+
+## Drop the readmit_num variable
+readmit_df_pp <- readmit_df_pp %>% 
+                  select(-readmit_num)
+
+## Take a glimpse at the data
+glimpse(readmit_df_pp)
+
+## Create the data split
+readmit_split <- initial_split(readmit_df_pp, prop = 0.8, strata = readmitted)
+
+## Create training and testing sets
+readmit_train <- training(readmit_split)
+readmit_test <- testing(readmit_split)
+
+## Check the dimension
+dim(readmit_train)
+dim(readmit_test)
+
+## Create CV object from training data
+readmit_folds <- vfold_cv(readmit_train)
+```
+
+# Creating a recipe
+```{r}
+## Create a recipe
+readmit_recipe <- 
+  ## Specify the formula
+  recipe(formula = readmitted ~ ., data = readmit_train) %>%
+  ## Specify pre-processing steps
+  step_normalize(all_numeric_predictors()) %>%
+  step_novel(all_nominal_predictors()) %>%
+  step_dummy(all_nominal_predictors(), one_hot = TRUE) %>%
+  step_zv(all_predictors())
+
+## Extract the preprocessed data (not necessary for the pipeline)
+readmit_train_preprocessed <- readmit_recipe %>%
+  ## Apply the recipe to the training data
+  prep(readmit_train) %>%
+  ## Extract the pre-processed training data
+  juice()
+
+## Print the pre-processed data
+readmit_train_preprocessed
+```
+
+# Specifying the models
+```{r}
+## Decision tree
+decision_tree_rpart_spec <-
+  decision_tree(tree_depth = tune(), min_n = tune(), cost_complexity = tune()) %>%
+  set_engine('rpart') %>%
+  set_mode('classification')
+
+## Logistic classifier (with a glmnet engine)
+logistic_reg_glmnet_spec <-
+  logistic_reg(penalty = tune(), mixture = tune()) %>%
+  set_engine('glmnet')
+
+
+## Naive Bayes
+
+naive_Bayes_naivebayes_spec<-
+  naive_Bayes(smoothness = tune(), Laplace = tune()) %>%
+  set_engine('naivebayes')
+
+## K-Nearest Neighbours
+
+nearest_neighbor_kknn_spec <-
+  nearest_neighbor(neighbors = tune(),
+                   weight_func = tune(), dist_power = tune()) %<%
+  set_engine('kknn') %>%
+  set_mode('classification')
+
+## Random forest
+rand_forest_ranger_spec <-
+  rand_forest(mtry = tune(), min_n = tune()) %<%
+  set_engine('ranger') %<%
+  set_mode('classification')
+
+
+## Linear Support Vector Machine (SVM)
+svm_linear_kernlab_spec <-
+  svm_linear(cost = tune(), margin = tune()) %<%
+  set_engine('kernlab') %<%
+  set_mode('classification')
+
+
+## Radial Basis Function (RBF) kernel SVM
+svm_rbf_kernlab_spec <-
+  svm_rbf(cost = tune(), rbf_sigma = tune(), margin = tune()) %<%
+  set_engine('kernlab') %<%
+  set_mode('classification')
+
+
+## XGBoost
+xgboost_spec <-
+  boost_tree(trees = tune(), mtry = tune(), learn_rate = tune()) %<%
+  set_engine("xgboost") %<%
+  set_mode('classification')
+
+
+## Specify that the model is a random forest
+randforest_model <- 
+  ## Specify that the `mtry` parameter needs to be tuned
+  rand_forest(mtry = tune()) %<%
+  ## Select the engine/package that underlies the model
+  set_engine("ranger", importance = "impurity") %<%
+  ## Choose a binary classification mode
+  set_mode('classification')
+
+```
+
+# Creating a workflow set
+```{r}
+## Create the workflow set
+readmit_workflow_set <- workflow_set(
+  preproc = list(rec = readmit_recipe),
+  models = list(decision_tree = decision_tree_rpart_spec,
+                logistic_reg = logistic_reg_glmnet_spec,
+                naive_Bayes = naive_Bayes_naivebayes_spec,
+                knn = nearest_neighbor_kknn_spec,
+                random_forest = rand_forest_ranger_spec,
+                svm_linear = svm_linear_kernlab_spec,
+                svm_rbf = svm_rbf_kernlab_spec,
+                xgboost = xgboost_spec)
+)
+
+## Print the workflow set
+readmit_workflow_set
+```
+
+# The hyperparameters Tuning
+
+```{r, error=FALSE}
+## Setting up the control parameters
+grid_ctrl <- control_grid(
+  verbose = TRUE,
+  save_pred = TRUE,
+  parallel_over = "everything",
+  save_workflow = TRUE
+)
+
+## Define the metrics
+readmit_metrics <- metric_set(accurcay, roc_auc, f_meas, sens, spec)
+
+## Create parallel training
+doParallel::registerDoParallel()
+
+## Setting the start time
+strt.time <- Sys.time()
+
+## Tune the model 
+#grid_results <- readmit_workflow_set %>% 
+#   workflow_map(
+#    verbose = TRUE,
+#     seed = 2024,
+#     resamples = readmit_folds,
+#     grid = 7,
+#     control = grid_ctrl,
+#    metrics = readmit_metrics
+#   )
+
+## Tracking the duration of loop
+Sys.time() - strt.time
+
+## Stop parallel training 
+doParallel::stopImplicitCluster()
+
+## Save the grid results
+#write_rds(grid_results, "readmit_grid_results.rds")
+
+## Load the grid results
+grid_results <- read_rds("readmit_grid_results.rds")
+
+## Specify a random model 
+rf_model <- 
+  rand_forest(mtry = tune()) %>%
+  set_engine("ranger", importance = "impurity") %>%
+  set_mode("classification") 
+
+## Create the workflow
+rf_workflow <- workflow() %>%
+  ## Add the recipe
+  add_recipe(readmit_recipe) %>%
+  ## Add the model
+  add_model(rf_model)
+
+## Specify the values to try
+rf_grid <- expand.grid(mtry = c(3, 4, 5))
+
+## Define the metrics
+rf_metrics <- metric_set(accuracy, roc_auc)
+
+## Tune the model
+rf_tune_results <- rf_workflow %>%
+  tune_grid(resamples = readmit_folds,
+            grid = rf_grid,
+            metrics = rf_metrics)
+
+## Print the results with collect_metrics()
+rf_tune_results %>%
+  collect_metrics()
+```
+
+# Evaluating and selecting prediction models
+
+```{r}
+## Create a table of model metric results
+grid_results %>% 
+  rank_results(select_best = TRUE) %>% 
+  mutate(across(c("mean","std_err"), \(x) round(x, 3))) %>% 
+  select(wflow_id, .metric, mean) %>% 
+  pivot_wider(names_from = .metric, values_from = mean) %>% 
+  arrange(-f_meas)
+
+## Plot the best model
+autoplot(grid_results, select_best = TRUE)
+```
+
+#Finalizing the workflow
+In this task, you will pull the best parameters from the best model and finalize the workflow.
+```{r}
+## Select the best model
+best_results <- grid_results %<%
+  extract_workflow_set_result("rec_logistic_reg") %<%
+  select_best(metric = "f_meas")
+
+## Print the best model
+best_results
+
+## Finalize the workflow using best model
+final_wf <- grid_results %<%
+  extact_workflow("rec_logistic_reg") %<%
+  finalize_workflow(best_results)
+
+## Specify a random forest model 
+rf_model <- 
+  rand_forest(mtry = tune()) %>%
+  set_engine("ranger", importance = "impurity") %>%
+  set_mode("classification") 
+
+## Create the workflow
+rf_workflow <- workflow() %>%
+  add_recipe(readmit_recipe) %>%
+  add_model(rf_model)
+
+## Specify the values to try
+rf_grid <- expand.grid(mtry = c(3, 4, 5))
+
+## Define the metrics
+rf_metrics <- metric_set(accuracy, roc_auc)
+
+## Tune the model
+rf_tune_results <- rf_workflow %>%
+  tune_grid(resamples = readmit_folds,
+            grid = rf_grid,
+            metrics = rf_metrics)
+
+## Select the best value for the mtry parameter using accuracy
+rf_final <- rf_tune_results %>%
+  select_best(metric = "accuracy")
+
+## Print the best model
+rf_final
+
+## Finalize the workflow
+rf_workflow_final <- rf_workflow %>%
+  finalize_work(rf_final)
+```
+
+# Evaluating the model on the test set
+```{r}
+## Fit on the training set and evaluate on test set
+readmit_last_fit <- final_wf %<%
+  last_fit(readmit_split, metrics = readmit_metrics)
+
+## Print the result of the last_fit
+readmit_last_fit
+
+## Extract the performance of the last model fit
+collect_metrics(readmit_last_fit)
+
+
+## Generate predictions from the test set
+test_preds <- readmit_last_fit %<%
+  collect_predictions()
+
+test_preds
+
+## Create a confusion matrix
+readmit_last_fit %<%
+  collect_predictions() %<%
+  conf_mat(estimate = .pred_class, truth = readmitted) %<%
+  autoplot()
+
+  
+```
+
+# Fitting and using the final model
+```{r}
+## Fit the final model
+final_model <- fit(final_wf, readmit_df_pp)
+
+## Print the final model
+final_model
+
+## Predict on the first patient
+predict(final_model, readmit_df_pp[1,] %>% select(-readmitted), type = "prob")
+
+## Define the data for the new patient
+new_patient <- tribble(~race, ~sex, ~age, ~hospital_stay, ~HbA1c, ~diabetesMed,
+                       ~admit_source, ~patient_visits,~num_medications, 
+                       ~num_diagnosis, ~insulin_level,
+                       "Others", "Male", "<60 years", 7, "Normal", "No",
+                       "Emerg", 3, 20, 8, "Up")
+new_patient
+
+## Predict the readmission status for the new patient
+predict(final_model, new_data = new_patient, type = "prob" )
+
+## Save the final model
+#write_rds(final_model,"final_readmission_model.rds")
+```
+
+## Creating a stroke prediction model in order to test that the same machine learning workflow can be adapted to a different problem—predicting the likelihood of a stroke.
+```{r}
+## Load the cleaned stroke data
+stroke_data <- read_csv("stroke_data.csv")
+
+## Take a glimpse at the data
+glimpse(stroke_data)
+
+## Convert data type
+stroke_data <- stroke_data %>% 
+  mutate_at(vars(!c(age, avg_glucose_level, bmi)), as.factor)
+
+## Create a broad overview of the data set
+glimpse(stroke_data)
+
+## Create a correlation matrix for 
+stroke_data %>%
+  dplyr::select(age, avg_glucose_level, bmi) %>%
+  ggcorr(label = TRUE)
+
+## Set the seed
+set.seed(2024)
+
+
+## Create the data split
+stroke_split <- initial_split(stroke_data, prop = .7, strata = stroke)
+
+## Create training and testing sets
+stroke_train <- training (stroke_split)
+stroke_test <- testing(stroke_split)
+
+## Check the dimension
+dim(stroke_train)
+dim(stroke_test)
+
+## Create the cross-validation set
+stroke_folds <- vfold_cv(stroke_train)
+
+## Define the recipe
+stroke_recipe <- recipe(formula = stroke ~ ., data = stroke_train) %<%
+  update_role(id, new_role = "ID") %<%
+  step_novel(all_nominal_predictors()) %<%
+  step_dummy(all_nominal_predictors(), one_hot = TRUE) %<%
+  step_zv(all_predictors()) %<%
+  step_normalize(all_numeric_predictors()) %<%
+  step_downsample(stroke)
+
+## Specify the random forest model 
+stroke_model <-
+  rand_forest(mtry = tune()) %<%
+  set_engine("ranger", importance = "impurity") %<%
+  set_mode("classification")
+
+## Create the workflow
+stroke_workflow <- workflow() %<%
+  add_recipe(stroke_recipe) %<%
+  add_model(stroke_model)
+
+## Specify the values to try
+stroke_grid <- expand.grid(mtry = c(3, 4, 5, 6))
+
+## Define the metrics
+stroke_metrics <- metric_set(accuracy, bal_accuracy, f_meas, roc_auc)
+
+## Tune the model
+stroke_tune_reaults <- stroke_workflow %<%
+  tune_grid(resamples = stroke_folds,
+            grid = stroke_grid,
+            metrics = stroke_metrics)
+
+
+## Print the result using collect_metrics
+stroke_tune_results %>%
+  collect_metrics()
+
+## Select the best value for the mtry parameter using the F-measure
+stroke_best_model <- stroke_tune_reaults %<%
+  select_best(metric = "f_meas")
+
+## Print the best model
+stroke_best_model
+
+## Finalize the workflow
+final_stroke_workflow <- stroke_workflow %<%
+  finalize_workflow(stroke_best_model)
+
+## Fit on the training set and evaluate on test set
+stroke_last_fit <- final_stroke_workflow %<%
+  last_fit(stroke_split, metrics = stroke_metrics)
+
+## Extract the performance of the last model fit
+collect_metrics(stroke_last_fit)
+
+## Create a confusion matrix
+stroke_last_fit %<%
+  collect_predictions() %<%
+  conf_mat(estimate = .pred_class, truth = stroke)
+
+## Fit the final model on the entire data
+stroke_final_model <- fit(final_stroke_workflow, stroke_data)
+
+## Extract the ranger model 
+stroke_varimp <- extract_fit_parsnip(stroke_final_model)$fit
+stroke_varimp
+
+## Extract the variable importance scores
+stroke_varimp$variable.importance
